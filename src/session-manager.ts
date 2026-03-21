@@ -214,8 +214,17 @@ export class SessionManager {
     };
     const killDetail = reasonMap[session.killReason] || "";
     const statusLabel = `Killed${killDetail ? ` (${killDetail})` : ""}`;
+    const killText = `⛔ [${session.name}] ${statusLabel} | ${costStr} | ${duration}`;
 
-    this.notifySession(session, `⛔ [${session.name}] ${statusLabel} | ${costStr} | ${duration}`);
+    // Passive kill (idle-timeout, shutdown, etc.): notify BOTH orchestrator and end user.
+    // Active kill (agent/user explicit): only notify end user (caller already knows).
+    const isPassiveKill = session.killReason !== "user";
+
+    if (isPassiveKill && this.shouldEmitTerminalWake(session)) {
+      this.triggerKillEvent(session, killDetail);
+    }
+
+    this.notifySession(session, killText);
   }
 
   private persistSession(session: Session): void {
@@ -421,6 +430,38 @@ export class SessionManager {
     this.dispatchSessionNotification(session, {
       label: "failed",
       userMessage: telegramText,
+      wakeMessage: eventText,
+      notifyUser: "always",
+    });
+  }
+
+  private triggerKillEvent(session: Session, killDetail: string): void {
+    const preview = this.getOutputPreview(session);
+    const outputSection = preview.trim()
+      ? ["", "Output preview:", preview]
+      : [];
+
+    const eventText = [
+      `Coding agent session was killed externally.`,
+      `Name: ${session.name} | ID: ${session.id}`,
+      `Kill reason: ${killDetail || session.killReason}`,
+      this.originThreadLine(session),
+      ...outputSection,
+      ``,
+      `[ACTION REQUIRED] Follow your autonomy rules for externally-killed sessions:`,
+      `1. Use agent_output(session='${session.id}', full=true) to inspect what was completed before the kill.`,
+      `2. If this was part of a multi-phase pipeline and the task was interrupted, relaunch or resume the task NOW.`,
+      `3. Do NOT wait for user input before taking action.`,
+    ].join("\n");
+
+    const costStr = `$${(session.costUsd ?? 0).toFixed(2)}`;
+    const duration = formatDuration(session.duration);
+    const killLabel = `Killed${killDetail ? ` (${killDetail})` : ""}`;
+    const userText = `⛔ [${session.name}] ${killLabel} | ${costStr} | ${duration}`;
+
+    this.dispatchSessionNotification(session, {
+      label: "killed",
+      userMessage: userText,
       wakeMessage: eventText,
       notifyUser: "always",
     });

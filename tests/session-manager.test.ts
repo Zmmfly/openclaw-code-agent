@@ -805,3 +805,131 @@ describe("SessionManager terminal wake behavior", () => {
     assert.equal(request.label, "failed");
   });
 });
+
+// =========================================================================
+// Passive kill notification (orchestrator wake)
+// =========================================================================
+
+describe("SessionManager passive kill notification", () => {
+  let sm: SessionManager;
+
+  beforeEach(() => {
+    sm = new SessionManager(5);
+    (sm as any).__dispatchCalls = [];
+    (sm as any).dispatchSessionNotification = (...args: any[]) => {
+      ((sm as any).__dispatchCalls ??= []).push(args);
+    };
+  });
+
+  it("session-11: passive kill (idle-timeout) sends wake to orchestrator", () => {
+    const s = fakeSession({
+      id: "s11",
+      name: "passive-kill-test",
+      status: "killed",
+      killReason: "idle-timeout",
+      completedAt: 1700000003000,
+      result: { session_id: "", num_turns: 2 },
+      getOutput: () => [],
+      originChannel: "feishu|ou_123",
+      originThreadId: "om_thread_abc",
+      originAgentId: "main",
+    });
+
+    (sm as any).onSessionTerminal(s);
+
+    // Two calls expected: one for the orchestrator wake (triggerKillEvent),
+    // one for the end-user notification (notifySession).
+    const calls = (sm as any).__dispatchCalls;
+    assert.equal(calls.length, 2);
+
+    const [wakeSession, wakeRequest] = calls[0];
+    assert.equal(wakeSession.id, "s11");
+    assert.equal(wakeRequest.label, "killed");
+    assert.equal(wakeRequest.notifyUser, "always");
+    assert.ok(wakeRequest.wakeMessage.includes("Coding agent session was killed externally"));
+    assert.ok(wakeRequest.wakeMessage.includes("Kill reason: idle"));
+    assert.ok(wakeRequest.wakeMessage.includes("agent_output"));
+    assert.ok(wakeRequest.wakeMessage.includes("relaunch or resume"));
+
+    const [notifySession, notifyRequest] = calls[1];
+    assert.equal(notifySession.id, "s11");
+    assert.equal(notifyRequest.label, "notification");
+    assert.ok(notifyRequest.userMessage.includes("⛔"));
+    assert.ok(notifyRequest.userMessage.includes("idle"));
+  });
+
+  it("session-12: active kill (user) does NOT send wake to orchestrator", () => {
+    const s = fakeSession({
+      id: "s12",
+      name: "user-kill-test",
+      status: "killed",
+      killReason: "user",
+      completedAt: 1700000004000,
+      result: { session_id: "", num_turns: 1 },
+      getOutput: () => [],
+      originChannel: "feishu|ou_456",
+      originAgentId: "main",
+    });
+
+    (sm as any).onSessionTerminal(s);
+
+    // Only one call: end-user notification (notifySession).
+    // No orchestrator wake for active kill.
+    const calls = (sm as any).__dispatchCalls;
+    assert.equal(calls.length, 1);
+
+    const [sessionArg, request] = calls[0];
+    assert.equal(sessionArg.id, "s12");
+    assert.equal(request.label, "notification");
+    assert.ok(request.userMessage.includes("⛔"));
+    assert.ok(request.userMessage.includes("user"));
+  });
+
+  it("session-13: passive kill de-dupes duplicate terminal wake for same marker", () => {
+    const s = fakeSession({
+      id: "s13",
+      name: "dup-kill",
+      status: "killed",
+      killReason: "shutdown",
+      completedAt: 1700000005000,
+      result: { session_id: "", num_turns: 3 },
+      getOutput: () => [],
+      originChannel: "feishu|ou_789",
+      originAgentId: "main",
+    });
+
+    (sm as any).onSessionTerminal(s);
+    (sm as any).onSessionTerminal(s);
+
+    const calls = (sm as any).__dispatchCalls;
+    // First call: wake + notify; second call: notify only (wake de-duped)
+    assert.equal(calls.length, 3);
+    assert.equal(calls[0][1].label, "killed");
+    assert.equal(calls[1][1].label, "notification");
+    assert.equal(calls[2][1].label, "notification");
+  });
+
+  it("session-14: passive kill with shutdown reason sets correct kill label", () => {
+    const s = fakeSession({
+      id: "s14",
+      name: "shutdown-kill-test",
+      status: "killed",
+      killReason: "shutdown",
+      completedAt: 1700000006000,
+      result: { session_id: "", num_turns: 0 },
+      getOutput: () => [],
+      originChannel: "feishu|ou_shutdown",
+      originAgentId: "main",
+    });
+
+    (sm as any).onSessionTerminal(s);
+
+    const calls = (sm as any).__dispatchCalls;
+    assert.equal(calls.length, 2);
+    const [wakeSession, wakeRequest] = calls[0];
+    assert.equal(wakeRequest.label, "killed");
+    assert.ok(wakeRequest.wakeMessage.includes("Kill reason: gateway shutdown"));
+    assert.ok(wakeRequest.wakeMessage.includes("s14"));
+    assert.ok(wakeRequest.wakeMessage.includes("shutdown-kill-test"));
+  });
+});
