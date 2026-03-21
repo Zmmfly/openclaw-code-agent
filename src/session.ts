@@ -524,12 +524,12 @@ export class Session extends EventEmitter {
             // Follow-up user messages were queued during this turn; keep the
             // session alive so the harness can consume them on the next turn.
           } else if (!needsInput) {
+            this.complete("done");
             this.emit("turnEnd", this, false);
             // `complete("done")` means "natural turn completion with no user
             // input needed". This is intentionally different from `kill("done")`:
             // completion emits the success lifecycle path and avoids killed/failure
             // terminal handling noise.
-            this.complete("done");
           }
         } else {
           this.transitionToTerminal(msg.data.success ? "completed" : "failed");
